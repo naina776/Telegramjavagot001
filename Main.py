@@ -16,10 +16,13 @@ import os
 
 client = OpenAI(
     base_url="https://router.huggingface.co/v1",
-    api_key=os.environ.get("HF_TOKEN")  # 
+    api_key=os.environ.get("HF_TOKEN") 
 )
 
-)
+
+
+
+
 
 # 4. Telegram Bot Handlers
 @bot.message_handler(commands=['start', 'help'])
