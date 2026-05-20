@@ -4,79 +4,85 @@ from flask import Flask, request
 from openai import OpenAI
 
 # 1. Fetch environment variables
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-HF_TOKEN = os.getenv("HF_TOKEN")
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+HF_TOKEN = os.environ.get("HF_TOKEN")
+# Render automatically provides this variable, so we know our App's URL!
+RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL") 
 
-# 2. Initialize Telegram Bot and Flask App
+if not BOT_TOKEN or not HF_TOKEN:
+    raise ValueError("BOT_TOKEN or HF_TOKEN is missing in environment variables.")
+
+# 2. Initialize OpenAI Client pointing to Hugging Face Router
+client = OpenAI(
+    base_url="https://router.huggingface.co/v1",
+    api_key=HF_TOKEN,
+)
+
+# 3. Initialize Telegram Bot & Flask App
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
-# 3. Initialize OpenAI Client for Hugging Face Router
-import os
+# --- TELEGRAM BOT LOGIC ---
 
-client = OpenAI(
-    base_url="https://router.huggingface.co/v1",
-    api_key=os.environ.get("HF_TOKEN") 
-)
-
-
-
-
-
-
-# 4. Telegram Bot Handlers
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    bot.reply_to(message, "Hello! I am a DeepSeek AI bot. Send me a message and I'll reply.")
+    bot.reply_to(message, "Hello! I am an AI chatbot. Send me a message and I will reply!")
 
 @bot.message_handler(func=lambda message: True)
-def handle_chat(message):
+def handle_message(message):
     try:
-        # Show "typing" status in Telegram
+        # Show "typing..." status in Telegram
         bot.send_chat_action(message.chat.id, 'typing')
         
-        # Call the Hugging Face API
+        # Call Hugging Face Router API via OpenAI library
         chat_completion = client.chat.completions.create(
             model="deepseek-ai/DeepSeek-V4-Pro:novita",
             messages=[
                 {
                     "role": "user",
                     "content": message.text,
-                }
+                },
             ],
         )
         
-        # Extract response and send it back to the user
-        reply_text = chat_completion.choices[0].message.content
-        bot.reply_to(message, reply_text)
+        # Extract the AI's reply and send it back to the user
+        reply = chat_completion.choices[0].message.content
+        bot.reply_to(message, reply)
         
     except Exception as e:
-        bot.reply_to(message, f"Oops! An error occurred: {str(e)}")
+        bot.reply_to(message, f"Sorry, an error occurred: {str(e)}")
 
-# 5. Flask Routes for Telegram Webhook
+
+# --- FLASK WEBHOOK LOGIC ---
+
+# Telegram will send new messages to this route securely
 @app.route('/' + BOT_TOKEN, methods=['POST'])
 def get_message():
-    # Receive updates from Telegram and pass to the bot
     json_string = request.get_data().decode('utf-8')
     update = telebot.types.Update.de_json(json_string)
     bot.process_new_updates([update])
     return "!", 200
 
+# Simple health check route so Render knows the app is alive
 @app.route("/")
 def index():
-    return "Bot is running perfectly!", 200
+    return "Bot is running and waiting for messages!", 200
 
-# 6. Webhook Setup
+
 if __name__ == "__main__":
-    # Remove existing webhook
+    # Remove any existing webhooks
     bot.remove_webhook()
     
-    # Render automatically sets RENDER_EXTERNAL_URL for web services
-    render_url = os.getenv("RENDER_EXTERNAL_URL")
-    if render_url:
-        # Set the new webhook to the Render URL
-        bot.set_webhook(url=f"{render_url}/{BOT_TOKEN}")
+    # Automatically set the webhook if running on Render
+    if RENDER_EXTERNAL_URL:
+        webhook_url = f"{RENDER_EXTERNAL_URL}/{BOT_TOKEN}"
+        bot.set_webhook(url=webhook_url)
+        print(f"Webhook securely set to: {webhook_url}")
+    else:
+        print("Running locally. Please use polling or set up ngrok.")
+        
+    # Render assigns a dynamic port, defaulting to 5000
+    port = int(os.environ.get('PORT', 5000))
     
-    # Render dynamically assigns a port using the PORT environment variable
-    port = int(os.environ.get("PORT", 5000))
+    # Start the Flask server
     app.run(host="0.0.0.0", port=port)
