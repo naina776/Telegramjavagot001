@@ -3,77 +3,69 @@ import telebot
 from flask import Flask, request
 from openai import OpenAI
 
-# ========================
-# ENV VARIABLES
-# ========================
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-HF_TOKEN = os.environ.get("HF_TOKEN")
-RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")
+# 1. Load Environment Variables
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+HF_TOKEN = os.getenv("HF_TOKEN")
+# Render automatically sets this environment variable for your web service
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL") 
 
 if not BOT_TOKEN or not HF_TOKEN:
-    raise ValueError("Missing BOT_TOKEN or HF_TOKEN")
+    raise ValueError("Missing BOT_TOKEN or HF_TOKEN environment variables.")
 
-# ========================
-# AI CLIENT (HuggingFace Router)
-# ========================
+# 2. Initialize Telegram Bot and Flask App
+bot = telebot.TeleBot(BOT_TOKEN)
+app = Flask(__name__)
+
+# 3. Initialize OpenAI Client (pointing to Hugging Face router)
 client = OpenAI(
     base_url="https://router.huggingface.co/v1",
     api_key=HF_TOKEN,
 )
 
-# ========================
-# TELEGRAM BOT + FLASK
-# ========================
-bot = telebot.TeleBot(BOT_TOKEN)
-app = Flask(__name__)
-
-# ========================
-# BOT COMMANDS
-# ========================
-@bot.message_handler(commands=['start', 'help'])
-def send_welcome(message):
-    bot.reply_to(message, "🤖 Hello! I am your AI bot.\nSend me any message!")
-
+# 4. Define Bot Message Handler
 @bot.message_handler(func=lambda message: True)
-def handle_message(message):
+def handle_chat(message):
     try:
+        # Show "typing..." status in Telegram
         bot.send_chat_action(message.chat.id, 'typing')
-
+        
+        # Call the Hugging Face model via OpenAI SDK
         response = client.chat.completions.create(
-            model="mistralai/Mixtral-8x7B-Instruct-v0.1",
+            model="deepseek-ai/DeepSeek-V4-Flash:fireworks-ai",
             messages=[
-                {"role": "user", "content": message.text}
+                {"role": "system", "content": "You are a helpful and conversational assistant."},
+                {"role": "user", "content": message.text},
             ],
         )
-
-        reply = response.choices[0].message.content
-        bot.reply_to(message, reply)
-
+        
+        # Get the response text and send it back to the user
+        reply_text = response.choices[0].message.content
+        bot.reply_to(message, reply_text)
+        
     except Exception as e:
-        bot.reply_to(message, f"⚠️ Error: {str(e)}")
+        print(f"Error: {e}")
+        bot.reply_to(message, "Sorry, I encountered an error while processing your request.")
 
-# ========================
-# WEBHOOK ROUTES
-# ========================
-@app.route('/' + BOT_TOKEN, methods=['POST'])
+# 5. Define Flask Routes for Webhook
+@app.route('/', methods=['GET'])
+def index():
+    return "Telegram Bot is running!", 200
+
+@app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def webhook():
-    json_str = request.get_data().decode('utf-8')
+    # Receive updates from Telegram and pass them to the bot
+    json_str = request.get_data().decode('UTF-8')
     update = telebot.types.Update.de_json(json_str)
     bot.process_new_updates([update])
-    return "OK", 200
+    return "", 200
 
-@app.route('/')
-def index():
-    return "Bot is running!", 200
-
-# ========================
-# SET WEBHOOK (IMPORTANT)
-# ========================
-bot.remove_webhook()
-
+# 6. Set Webhook on Startup
 if RENDER_EXTERNAL_URL:
-    webhook_url = f"{RENDER_EXTERNAL_URL}/{BOT_TOKEN}"
-    bot.set_webhook(url=webhook_url)
-    print("Webhook set:", webhook_url)
-else:
-    print("Running locally")
+    bot.remove_webhook()
+    # Set the webhook URL to your Render app URL + the bot token path
+    bot.set_webhook(url=f"{RENDER_EXTERNAL_URL}/{BOT_TOKEN}")
+
+if __name__ == "__main__":
+    # Render assigns a dynamic PORT via environment variable
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host="0.0.0.0", port=port)
